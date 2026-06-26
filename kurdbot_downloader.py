@@ -1,38 +1,35 @@
-"""
-🎵 ربات کردی - نسخه سازگار
-"""
 import os
 import re
 import logging
 import tempfile
+import asyncio
 import subprocess
 from pathlib import Path
 from telegram import Update
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = "8863073767:AAHvRiufJzGOcOwdEYWjfvb1461jFemuUP8"
-
 logging.basicConfig(level=logging.INFO)
 
-INSTAGRAM_RE = re.compile(r"(https?://)?(www\.)?instagram\.com/(p|reel|tv|stories)/[\w\-]+")
+IG_RE = re.compile(r"(https?://)?(www\.)?instagram\.com/(p|reel|tv|stories)/[\w\-]+")
 
 def get_url(text):
-    m = INSTAGRAM_RE.search(text)
-    if m:
-        u = m.group(0)
-        return u if u.startswith("http") else "https://" + u
-    return ""
+    m = IG_RE.search(text)
+    if not m:
+        return ""
+    u = m.group(0)
+    return u if u.startswith("http") else "https://" + u
 
 def download(url, folder):
     try:
-        out = os.path.join(folder, "%(title)s.%(ext)s")
+        out = os.path.join(folder, "file.%(ext)s")
         r = subprocess.run(
             ["yt-dlp", "-o", out, "--no-playlist", "--max-filesize", "49m", url],
             capture_output=True, timeout=120
         )
         files = list(Path(folder).glob("*"))
         if not files:
-            return None, "❌ دانلود نشد: " + r.stderr.decode()[-200:]
+            return None, "❌ دانلود نشد"
         f = str(files[0])
         ext = Path(f).suffix.lower()
         if ext in [".mp3", ".m4a", ".aac", ".ogg"]:
@@ -42,47 +39,42 @@ def download(url, folder):
         else:
             t = "doc"
         return f, t
-    except subprocess.TimeoutExpired:
-        return None, "⏰ وقت تموم شد"
     except Exception as e:
         return None, f"❌ {e}"
 
-def start(update, context):
-    name = update.effective_user.first_name or "دوست"
-    update.message.reply_text(
-        f"سلام {name}! 👋\n\n"
-        "🎵 ربات محتوای کردی\n\n"
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"سلام! 👋\n\n🎵 ربات محتوای کردی\n\n"
         "📎 لینک اینستاگرام بفرست → دانلود\n"
         "✏️ اسم آهنگ بنویس → جستجو"
     )
 
-def handle(update, context):
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     url = get_url(text)
-
     if url:
-        msg = update.message.reply_text("⬇️ دارم دانلود میکنم...")
+        msg = await update.message.reply_text("⬇️ دارم دانلود میکنم...")
         with tempfile.TemporaryDirectory() as tmp:
-            path, ftype = download(url, tmp)
+            path, ftype = await asyncio.to_thread(download, url, tmp)
             if not path:
-                msg.edit_text(ftype)
+                await msg.edit_text(ftype)
                 return
-            msg.edit_text("📤 آپلود میشه...")
+            await msg.edit_text("📤 آپلود میشه...")
             try:
                 with open(path, "rb") as f:
                     if ftype == "video":
-                        update.message.reply_video(f, caption="🎵 محتوای کردی")
+                        await update.message.reply_video(f, caption="🎵 محتوای کردی")
                     elif ftype == "audio":
-                        update.message.reply_audio(f, caption="🎵 محتوای کردی")
+                        await update.message.reply_audio(f, caption="🎵 محتوای کردی")
                     else:
-                        update.message.reply_document(f, caption="🎵 محتوای کردی")
-                msg.delete()
+                        await update.message.reply_document(f, caption="🎵 محتوای کردی")
+                await msg.delete()
             except Exception as e:
-                msg.edit_text(f"❌ {str(e)[:150]}")
+                await msg.edit_text(f"❌ {str(e)[:150]}")
     else:
         yt = f"https://www.youtube.com/results?search_query=Kurdish+{text.replace(' ','+')}"
         ig = f"https://www.instagram.com/explore/search/?q={text.replace(' ','+')}"
-        update.message.reply_text(
+        await update.message.reply_text(
             f"🔍 *{text}*\n\n▶️ [یوتیوب]({yt})\n📸 [اینستاگرام]({ig})\n\n"
             "💡 لینک پست رو بفرست تا دانلود کنم!",
             parse_mode="Markdown",
@@ -90,13 +82,12 @@ def handle(update, context):
         )
 
 def main():
-    updater = Updater(TOKEN)
-    dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle))
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
     print("🎵 ربات روشنه!")
-    updater.start_polling()
-    updater.idle()
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
+    
