@@ -1,150 +1,102 @@
 """
-🎵 KurdBot Downloader - ربات تلگرام محتوای کردی
+🎵 ربات کردی - نسخه سازگار
 """
-
 import os
 import re
 import logging
 import tempfile
-import asyncio
+import subprocess
 from pathlib import Path
-
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
 TOKEN = "8863073767:AAHvRiufJzGOcOwdEYWjfvb1461jFemuUP8"
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(level=logging.INFO)
 
-INSTAGRAM_PATTERN = re.compile(
-    r"(https?://)?(www\.)?instagram\.com/(p|reel|tv|stories)/[\w\-]+"
-)
+INSTAGRAM_RE = re.compile(r"(https?://)?(www\.)?instagram\.com/(p|reel|tv|stories)/[\w\-]+")
 
-def is_instagram_link(text):
-    return bool(INSTAGRAM_PATTERN.search(text))
-
-def extract_url(text):
-    match = INSTAGRAM_PATTERN.search(text)
-    if match:
-        url = match.group(0)
-        if not url.startswith("http"):
-            url = "https://" + url
-        return url
+def get_url(text):
+    m = INSTAGRAM_RE.search(text)
+    if m:
+        u = m.group(0)
+        return u if u.startswith("http") else "https://" + u
     return ""
 
-async def download_content(url, output_dir):
+def download(url, folder):
     try:
-        out_template = os.path.join(output_dir, "%(title)s.%(ext)s")
-        dl_cmd = [
-            "yt-dlp",
-            "-o", out_template,
-            "--no-playlist",
-            "--max-filesize", "49m",
-            url
-        ]
-        proc = await asyncio.create_subprocess_exec(
-            *dl_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+        out = os.path.join(folder, "%(title)s.%(ext)s")
+        r = subprocess.run(
+            ["yt-dlp", "-o", out, "--no-playlist", "--max-filesize", "49m", url],
+            capture_output=True, timeout=120
         )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-
-        files = list(Path(output_dir).glob("*"))
+        files = list(Path(folder).glob("*"))
         if not files:
-            return {"error": "❌ فایلی دانلود نشد.\n" + stderr.decode()[-200:]}
-
-        file_path = str(files[0])
-        ext = Path(file_path).suffix.lower()
-
-        if ext in [".mp3", ".m4a", ".aac", ".ogg", ".opus"]:
-            ftype = "audio"
-        elif ext in [".mp4", ".mov", ".avi", ".mkv", ".webm"]:
-            ftype = "video"
+            return None, "❌ دانلود نشد: " + r.stderr.decode()[-200:]
+        f = str(files[0])
+        ext = Path(f).suffix.lower()
+        if ext in [".mp3", ".m4a", ".aac", ".ogg"]:
+            t = "audio"
+        elif ext in [".mp4", ".mov", ".mkv", ".webm"]:
+            t = "video"
         else:
-            ftype = "photo"
-
-        return {"path": file_path, "type": ftype}
-
-    except asyncio.TimeoutError:
-        return {"error": "⏰ وقت دانلود تموم شد."}
-    except FileNotFoundError:
-        return {"error": "❌ yt-dlp پیدا نشد."}
+            t = "doc"
+        return f, t
+    except subprocess.TimeoutExpired:
+        return None, "⏰ وقت تموم شد"
     except Exception as e:
-        return {"error": f"❌ خطا: {str(e)}"}
+        return None, f"❌ {e}"
 
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update, context):
     name = update.effective_user.first_name or "دوست"
-    await update.message.reply_text(
+    update.message.reply_text(
         f"سلام {name}! 👋\n\n"
-        "🎵 به ربات محتوای کردی خوش اومدی!\n\n"
-        "📎 لینک اینستاگرام بفرست → دانلود میکنم\n"
-        "✏️ اسم آهنگ یا فیلم بنویس → پیدا میکنم"
+        "🎵 ربات محتوای کردی\n\n"
+        "📎 لینک اینستاگرام بفرست → دانلود\n"
+        "✏️ اسم آهنگ بنویس → جستجو"
     )
 
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle(update, context):
     text = update.message.text.strip()
+    url = get_url(text)
 
-    if is_instagram_link(text):
-        url = extract_url(text)
-        msg = await update.message.reply_text("⬇️ دارم دانلود میکنم... صبر کن 🎵")
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            result = await download_content(url, tmpdir)
-
-            if "error" in result:
-                await msg.edit_text(result["error"])
+    if url:
+        msg = update.message.reply_text("⬇️ دارم دانلود میکنم...")
+        with tempfile.TemporaryDirectory() as tmp:
+            path, ftype = download(url, tmp)
+            if not path:
+                msg.edit_text(ftype)
                 return
-
-            file_path = result["path"]
-            ftype = result["type"]
-            caption = "🎵 محتوای کردی"
-
+            msg.edit_text("📤 آپلود میشه...")
             try:
-                await msg.edit_text("📤 داره آپلود میشه...")
-                if ftype == "video":
-                    with open(file_path, "rb") as f:
-                        await update.message.reply_video(f, caption=caption, supports_streaming=True)
-                elif ftype == "audio":
-                    with open(file_path, "rb") as f:
-                        await update.message.reply_audio(f, caption=caption)
-                else:
-                    with open(file_path, "rb") as f:
-                        await update.message.reply_document(f, caption=caption)
-                await msg.delete()
+                with open(path, "rb") as f:
+                    if ftype == "video":
+                        update.message.reply_video(f, caption="🎵 محتوای کردی")
+                    elif ftype == "audio":
+                        update.message.reply_audio(f, caption="🎵 محتوای کردی")
+                    else:
+                        update.message.reply_document(f, caption="🎵 محتوای کردی")
+                msg.delete()
             except Exception as e:
-                await msg.edit_text(f"❌ خطا در آپلود: {str(e)[:150]}")
+                msg.edit_text(f"❌ {str(e)[:150]}")
     else:
-        yt_url = f"https://www.youtube.com/results?search_query=Kurdish+{text.replace(' ', '+')}"
-        ig_url = f"https://www.instagram.com/explore/search/?q={text.replace(' ', '+')}"
-        await update.message.reply_text(
-            f"🔍 نتیجه برای: *{text}*\n\n"
-            f"▶️ [یوتیوب]({yt_url})\n"
-            f"📸 [اینستاگرام]({ig_url})\n\n"
-            "💡 لینک مستقیم پست رو بفرست تا دانلود کنم!",
+        yt = f"https://www.youtube.com/results?search_query=Kurdish+{text.replace(' ','+')}"
+        ig = f"https://www.instagram.com/explore/search/?q={text.replace(' ','+')}"
+        update.message.reply_text(
+            f"🔍 *{text}*\n\n▶️ [یوتیوب]({yt})\n📸 [اینستاگرام]({ig})\n\n"
+            "💡 لینک پست رو بفرست تا دانلود کنم!",
             parse_mode="Markdown",
             disable_web_page_preview=True
         )
 
-
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    updater = Updater(TOKEN)
+    dp = updater.dispatcher
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle))
     print("🎵 ربات روشنه!")
-    app.run_polling()
-
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == "__main__":
     main()
-        
