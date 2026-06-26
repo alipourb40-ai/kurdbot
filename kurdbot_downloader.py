@@ -1,14 +1,14 @@
-import os
 import re
-import logging
+import os
+import json
+import httpx
 import tempfile
 import subprocess
 from pathlib import Path
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = "8863073767:AAHvRiufJzGOcOwdEYWjfvb1461jFemuUP8"
-logging.basicConfig(level=logging.INFO)
+API = f"https://api.telegram.org/bot{TOKEN}"
+
 IG_RE = re.compile(r"(https?://)?(www\.)?instagram\.com/(p|reel|tv|stories)/[\w\-]+")
 
 def get_url(text):
@@ -17,6 +17,24 @@ def get_url(text):
         return ""
     u = m.group(0)
     return u if u.startswith("http") else "https://" + u
+
+def send(chat_id, text):
+    httpx.post(f"{API}/sendMessage", json={"chat_id": chat_id, "text": text})
+
+def edit(chat_id, msg_id, text):
+    httpx.post(f"{API}/editMessageText", json={"chat_id": chat_id, "message_id": msg_id, "text": text})
+
+def send_video(chat_id, path):
+    with open(path, "rb") as f:
+        httpx.post(f"{API}/sendVideo", data={"chat_id": chat_id}, files={"video": f}, timeout=120)
+
+def send_audio(chat_id, path):
+    with open(path, "rb") as f:
+        httpx.post(f"{API}/sendAudio", data={"chat_id": chat_id}, files={"audio": f}, timeout=120)
+
+def send_doc(chat_id, path):
+    with open(path, "rb") as f:
+        httpx.post(f"{API}/sendDocument", data={"chat_id": chat_id}, files={"document": f}, timeout=120)
 
 def dl(url, folder):
     out = os.path.join(folder, "file.%(ext)s")
@@ -32,42 +50,48 @@ def dl(url, folder):
         return f, "video"
     return f, "doc"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("سلام! لینک اینستاگرام بفرست تا دانلود کنم")
-
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+def handle(update):
+    msg = update.get("message", {})
+    chat_id = msg.get("chat", {}).get("id")
+    text = msg.get("text", "").strip()
+    if not chat_id or not text:
+        return
+    if text == "/start":
+        send(chat_id, "سلام! لینک اینستاگرام بفرست تا دانلود کنم 🎵")
+        return
     url = get_url(text)
     if url:
-        msg = await update.message.reply_text("دارم دانلود میکنم...")
+        r = httpx.post(f"{API}/sendMessage", json={"chat_id": chat_id, "text": "دارم دانلود میکنم..."})
+        msg_id = r.json().get("result", {}).get("message_id")
         with tempfile.TemporaryDirectory() as tmp:
-            try:
-                path, ftype = dl(url, tmp)
-                if not path:
-                    await msg.edit_text("دانلود نشد")
-                    return
-                await msg.edit_text("آپلود میشه...")
-                with open(path, "rb") as f:
-                    if ftype == "video":
-                        await update.message.reply_video(f)
-                    elif ftype == "audio":
-                        await update.message.reply_audio(f)
-                    else:
-                        await update.message.reply_document(f)
-                await msg.delete()
-            except Exception as e:
-                await msg.edit_text(str(e)[:200])
+            path, ftype = dl(url, tmp)
+            if not path:
+                edit(chat_id, msg_id, "دانلود نشد")
+                return
+            edit(chat_id, msg_id, "آپلود میشه...")
+            if ftype == "video":
+                send_video(chat_id, path)
+            elif ftype == "audio":
+                send_audio(chat_id, path)
+            else:
+                send_doc(chat_id, path)
     else:
         yt = "https://www.youtube.com/results?search_query=Kurdish+" + text.replace(" ", "+")
-        await update.message.reply_text("لینک پیدا نشد\n\nیوتیوب: " + yt)
+        send(chat_id, f"لینک اینستاگرام بفرست!\n\nیوتیوب: {yt}")
 
 def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    offset = 0
     print("ربات روشنه!")
-    app.run_polling()
+    while True:
+        try:
+            r = httpx.get(f"{API}/getUpdates", params={"offset": offset, "timeout": 30}, timeout=40)
+            updates = r.json().get("result", [])
+            for u in updates:
+                offset = u["update_id"] + 1
+                handle(u)
+        except Exception as e:
+            print(f"خطا: {e}")
 
 if __name__ == "__main__":
     main()
-            
+    
