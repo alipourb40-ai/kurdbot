@@ -6,7 +6,7 @@ import asyncio
 import subprocess
 from pathlib import Path
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+ApplicationBuilder ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 TOKEN = "8863073767:AAHvRiufJzGOcOwdEYWjfvb1461jFemuUP8"
 logging.basicConfig(level=logging.INFO)
